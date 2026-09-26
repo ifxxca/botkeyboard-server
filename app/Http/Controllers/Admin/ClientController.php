@@ -23,6 +23,7 @@ class ClientController extends Controller
 
         return view('admin.clients.index', [
             'clients' => $clients,
+            'latestAgentVersion' => config('attention.agent_latest_version'),
             'counts' => [
                 'total' => $all->count(),
                 'online' => $all->filter(fn (Client $client): bool => $client->connectionStatus() === 'online')->count(),
@@ -60,7 +61,10 @@ class ClientController extends Controller
 
     public function show(Client $client): View
     {
-        return view('admin.clients.show', compact('client'));
+        return view('admin.clients.show', [
+            'client' => $client,
+            'latestAgentVersion' => config('attention.agent_latest_version'),
+        ]);
     }
 
     public function disable(Request $request, Client $client, AuditWriter $audit): RedirectResponse

@@ -26,7 +26,7 @@
                         @elseif ($connection === 'never') <span class="badge badge-never">Belum pernah terhubung</span>
                         @else <span class="badge badge-disabled">Disabled</span> @endif
                     </td>
-                    <td>{{ $client->agent_version ?? '—' }}</td>
+                    <td>{{ $client->agent_version ?? '—' }} @if($latestAgentVersion && $client->agent_version && version_compare($client->agent_version, $latestAgentVersion, '<'))<div class="badge badge-never" style="margin-top:5px">Perlu update · terbaru {{ $latestAgentVersion }}</div>@endif</td>
                     <td>@if($client->last_seen_at)<strong>{{ $client->last_seen_at->diffForHumans() }}</strong><div class="muted" style="margin-top:3px">{{ $client->last_seen_at->timezone(config('attention.display_timezone'))->format('d M Y H:i:s') }}</div>@else<span class="muted">—</span>@endif</td>
                     <td>{{ $client->created_at->timezone(config('attention.display_timezone'))->format('d M Y') }}</td>
                     <td><a class="btn btn-secondary btn-sm" href="{{ route('admin.clients.show', $client) }}">Detail</a></td>
