@@ -5,7 +5,7 @@
 <div class="content-grid">
     <section class="card"><div class="card-header"><h2 class="card-title">Upload file</h2><p class="card-description">Mendukung workbook .xlsx atau laporan operasional .csv.</p></div>
         <form class="card-content form-grid" method="post" action="{{ route('admin.imports.store') }}" enctype="multipart/form-data">@csrf
-            <label class="field"><span class="label">File sumber</span><input class="file-input" type="file" name="workbook" accept=".xlsx,.csv" required><span class="help">CSV mengambil hanya baris GOODS_VALUE di atas Rp2.000.000. Preview tidak mengubah data aktif.</span></label>
+            <label class="field"><span class="label">File sumber</span><input class="file-input" type="file" name="workbook" accept=".xlsx,.csv" required><span class="help">Laporan HVI/RDO mendukung kolom Cnote No / Cnote Goods Value. Tanda hubung pemisah pada Cnote No diabaikan. Unggah CSV sumber agar nol di depan tetap terjaga; di XLSX, Cnote No harus berupa teks.</span></label>
             <div><button class="btn btn-primary" type="submit">Upload & preview</button></div>
         </form>
     </section>

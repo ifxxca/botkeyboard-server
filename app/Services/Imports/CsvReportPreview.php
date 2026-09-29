@@ -89,16 +89,23 @@ class CsvReportPreview
     private function columns(array $header): array
     {
         $found = [];
+        $aliases = [
+            'AWB' => 'AWB',
+            'CNOTE NO' => 'AWB',
+            'GOODS_VALUE' => 'GOODS_VALUE',
+            'CNOTE GOODS VALUE' => 'GOODS_VALUE',
+        ];
 
         foreach ($header as $index => $name) {
             $normalized = strtoupper(trim($index === 0 ? preg_replace('/^\xEF\xBB\xBF/', '', (string) $name) : (string) $name));
+            $canonical = $aliases[$normalized] ?? null;
 
-            if (in_array($normalized, ['AWB', 'GOODS_VALUE'], true)) {
-                if (isset($found[$normalized])) {
+            if ($canonical !== null) {
+                if (isset($found[$canonical])) {
                     throw new InvalidArgumentException('CSV report has duplicate required headers.');
                 }
 
-                $found[$normalized] = $index;
+                $found[$canonical] = $index;
             }
         }
 
@@ -135,7 +142,10 @@ class CsvReportPreview
         try {
             $rawAwb = trim((string) $fields[$columns['AWB']], ' ');
             // The operational CSV prefixes identifiers with an apostrophe to protect them in Excel.
-            $awb = $this->normalizer->normalize(str_starts_with($rawAwb, "'") ? substr($rawAwb, 1) : $rawAwb);
+            $rawAwb = str_starts_with($rawAwb, "'") ? substr($rawAwb, 1) : $rawAwb;
+            // HVI/RDO exports may add hyphens as visual separators in Cnote No.
+            $rawAwb = str_replace('-', '', $rawAwb);
+            $awb = $this->normalizer->normalize($rawAwb);
         } catch (InvalidArgumentException $exception) {
             return $this->row('INVALID', $exception->getMessage());
         }

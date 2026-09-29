@@ -57,7 +57,11 @@ class WorkbookPreview
                     }
 
                     $counts['total_rows']++;
-                    $counts[strtolower($row['status']).'_rows']++;
+
+                    if ($row['status'] !== 'EXCLUDED') {
+                        $counts[strtolower($row['status']).'_rows']++;
+                    }
+
                     $pending[] = ['import_batch_id' => $batch->id, 'row_number' => $rowNumber, ...$row,
                         'created_at' => now(), 'updated_at' => now()];
 
@@ -113,12 +117,8 @@ class WorkbookPreview
     /** @return array<string, int> */
     private function headers(Worksheet $sheet): array
     {
-        $columns = [];
+        $rawHeaders = [];
         $lastColumn = Coordinate::columnIndexFromString($sheet->getHighestDataColumn());
-
-        if ($lastColumn > count(self::HEADERS)) {
-            throw new InvalidArgumentException('Workbook contains unexpected columns.');
-        }
 
         for ($column = 1; $column <= $lastColumn; $column++) {
             $cell = $sheet->getCell([$column, 1]);
@@ -127,7 +127,40 @@ class WorkbookPreview
                 throw new InvalidArgumentException('Header formulas are not allowed.');
             }
 
-            $header = strtoupper(trim((string) $cell->getValue()));
+            $rawHeaders[$column] = strtoupper(trim((string) $cell->getValue()));
+        }
+
+        $isHviReport = in_array('CNOTE NO', $rawHeaders, true)
+            && in_array('CNOTE GOODS VALUE', $rawHeaders, true);
+
+        if ($isHviReport) {
+            $columns = [];
+            $aliases = ['CNOTE NO' => 'AWB', 'CNOTE GOODS VALUE' => 'VALUE'];
+
+            foreach ($rawHeaders as $column => $header) {
+                $canonical = $aliases[$header] ?? null;
+
+                if ($canonical !== null) {
+                    if (isset($columns[$canonical])) {
+                        throw new InvalidArgumentException('Workbook has duplicate HVI/RDO headers.');
+                    }
+
+                    $columns[$canonical] = $column;
+                }
+            }
+
+            $columns['__HVI_REPORT'] = -1;
+
+            return $columns;
+        }
+
+        if ($lastColumn > count(self::HEADERS)) {
+            throw new InvalidArgumentException('Workbook contains unexpected columns.');
+        }
+
+        $columns = [];
+
+        foreach ($rawHeaders as $column => $header) {
 
             if ($header === '' || ! in_array($header, self::HEADERS, true) || isset($columns[$header])) {
                 throw new InvalidArgumentException('Workbook headers are missing, duplicated, or unsupported.');
@@ -152,11 +185,19 @@ class WorkbookPreview
         $cells = [];
 
         foreach ($headers as $header => $column) {
+            if ($header === '__HVI_REPORT') {
+                continue;
+            }
+
             $cells[$header] = $sheet->getCell([$column, $rowNumber]);
         }
 
         if (collect($cells)->every(fn (Cell $cell): bool => $cell->getValue() === null || $cell->getValue() === '')) {
             return null;
+        }
+
+        if (isset($headers['__HVI_REPORT'])) {
+            return $this->parseHviRow($cells, $seen);
         }
 
         $issue = null;
@@ -206,6 +247,56 @@ class WorkbookPreview
         return ['awb' => $awb, 'reason_code' => null, 'severity' => null,
             'title' => null, 'message' => null, 'declared_value' => null,
             'status' => 'INVALID', 'issue' => $issue];
+    }
+
+    /** @param array<string, Cell> $cells
+     * @param array<string, bool> $seen
+     * @return array<string, int|string|null>
+     */
+    private function parseHviRow(array $cells, array &$seen): array
+    {
+        try {
+            $value = $this->value($cells['VALUE']);
+
+            if ($value === null) {
+                return $this->hviRow('EXCLUDED', 'Cnote Goods Value is empty.');
+            }
+
+            if ($value <= 2_000_000) {
+                return $this->hviRow('EXCLUDED', 'Cnote Goods Value is not above 2000000.');
+            }
+
+            $awbCell = $cells['AWB'];
+
+            if (! in_array($awbCell->getDataType(), [DataType::TYPE_STRING, DataType::TYPE_STRING2, DataType::TYPE_INLINE], true)) {
+                throw new InvalidArgumentException('Cnote No must be stored as text, not numeric or formula.');
+            }
+
+            $rawAwb = trim((string) $awbCell->getValue(), ' ');
+            $rawAwb = str_starts_with($rawAwb, "'") ? substr($rawAwb, 1) : $rawAwb;
+            // HVI/RDO exports may add hyphens as visual separators in Cnote No.
+            $awb = $this->normalizer->normalize(str_replace('-', '', $rawAwb));
+
+            if (isset($seen[$awb])) {
+                return $this->hviRow('DUPLICATE', 'Repeated qualifying AWB in workbook.', $awb);
+            }
+
+            $seen[$awb] = true;
+
+            return $this->hviRow('VALID', null, $awb, $value);
+        } catch (InvalidArgumentException $exception) {
+            return $this->hviRow('INVALID', $exception->getMessage());
+        }
+    }
+
+    /** @return array<string, int|string|null> */
+    private function hviRow(string $status, ?string $issue, ?string $awb = null, ?int $value = null): array
+    {
+        return ['awb' => $awb, 'reason_code' => $status === 'VALID' ? 'HIGH_VALUE' : null,
+            'severity' => $status === 'VALID' ? 'critical' : null,
+            'title' => $status === 'VALID' ? 'High Value Shipment' : null,
+            'message' => $status === 'VALID' ? 'Shipment membutuhkan perhatian khusus.' : null,
+            'declared_value' => $value, 'status' => $status, 'issue' => $issue];
     }
 
     private function text(?Cell $cell, string $default, int $limit): string

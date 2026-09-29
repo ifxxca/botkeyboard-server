@@ -9,7 +9,7 @@
     <div class="card stat-card"><div class="stat-head">Invalid / duplicate</div><div class="stat-value">{{ number_format($batch->invalid_rows + $batch->duplicate_rows) }}</div></div>
 </section>
 <div class="alert alert-info">Mode: replace complete active set. Previewed base batch: {{ $batch->base_active_batch_id ?? 'none' }}. Commit dibatalkan jika snapshot lain sudah diaktifkan.</div>
-@if($batch->invalid_rows > 0)<div class="alert alert-warning">AWB berupa angka atau formula ditolak. Konversi digit sumber yang masih utuh menjadi nilai teks di Excel, lalu unggah ulang.</div>@endif
+@if($batch->invalid_rows > 0)<div class="alert alert-warning">Ada baris invalid. Periksa kolom Issue pada tabel untuk mengetahui masalah tiap baris, perbaiki file sumber, lalu unggah ulang sebelum commit.</div>@endif
 <section class="card"><div class="card-header"><div class="page-header" style="margin:0"><div><h2 class="card-title">Hasil validasi</h2><p class="card-description">INVALID dan DUPLICATE harus diperbaiki sebelum commit.</p></div>
 @if($batch->status === 'VALIDATED' && $batch->valid_rows > 0 && $batch->invalid_rows === 0 && $batch->duplicate_rows === 0)<form method="post" action="{{ route('admin.imports.commit', $batch) }}">@csrf<button class="btn btn-primary" type="submit">Commit complete snapshot</button></form>@endif
 </div></div><div class="card-content" style="padding-left:0;padding-right:0;padding-bottom:0"><div class="table-wrap"><table class="table"><thead><tr><th>Row</th><th>AWB</th><th>Reason</th><th>Status</th><th>Issue</th></tr></thead><tbody>
