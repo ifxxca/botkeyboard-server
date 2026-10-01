@@ -250,7 +250,7 @@ class WorkbookPreview
     }
 
     /** @param array<string, Cell> $cells
-     * @param array<string, bool> $seen
+     * @param  array<string, bool>  $seen
      * @return array<string, int|string|null>
      */
     private function parseHviRow(array $cells, array &$seen): array

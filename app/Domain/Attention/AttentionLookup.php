@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\DB;
 
 class AttentionLookup
 {
-    /** @return array{matched: bool, alerts?: list<array{reason: string, severity: string, title: string, message: string, declared_value: ?int}>} */
+    /** @return array{matched: bool, alerts?: list<array{id: string, reason: string, severity: string, title: string, message: string, declared_value: ?int}>} */
     public function check(string $awb): array
     {
         $now = now();
@@ -15,19 +15,25 @@ class AttentionLookup
             ->where('dataset.id', 1)
             ->where('item.awb', $awb)
             ->where('item.active', true)
+            ->whereNotExists(function ($query): void {
+                $query->selectRaw('1')
+                    ->from('attention_acknowledgements as acknowledgement')
+                    ->whereColumn('acknowledgement.attention_item_id', 'item.id');
+            })
             ->where(function ($query) use ($now): void {
                 $query->whereNull('item.valid_from')->orWhere('item.valid_from', '<=', $now);
             })
             ->where(function ($query) use ($now): void {
                 $query->whereNull('item.valid_until')->orWhere('item.valid_until', '>', $now);
             })
-            ->get(['item.reason_code', 'item.severity', 'item.title', 'item.message', 'item.declared_value']);
+            ->get(['item.public_id', 'item.reason_code', 'item.severity', 'item.title', 'item.message', 'item.declared_value']);
 
         if ($items->isEmpty()) {
             return ['matched' => false];
         }
 
         $alerts = $items->map(fn ($item): array => [
+            'id' => $item->public_id,
             'reason' => $item->reason_code,
             'severity' => $item->severity,
             'title' => $item->title,
