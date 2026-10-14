@@ -118,7 +118,7 @@ class CsvReportPreview
 
     /** @param array<int, string|null> $fields
      * @param  array{AWB: int, GOODS_VALUE: int}  $columns
-     * @param  array<string, bool>  $seen
+     * @param  array<string, int>  $seen
      * @return array<string, int|string|null>
      */
     private function parseRow(array $fields, array $columns, array &$seen): array
@@ -129,11 +129,15 @@ class CsvReportPreview
             return $this->row('EXCLUDED', 'GOODS_VALUE is empty.');
         }
 
-        if (preg_match('/\A(?:0|[1-9][0-9]{0,14})\z/D', $rawValue) !== 1) {
+        if (preg_match('/\A-?(?:0|[1-9][0-9]{0,14})\z/D', $rawValue) !== 1) {
             return $this->row('INVALID', 'GOODS_VALUE must be a whole number of at most 15 digits.');
         }
 
         $value = (int) $rawValue;
+
+        if ($value < 0) {
+            return $this->row('EXCLUDED', 'GOODS_VALUE is negative; excluded from high-value selection.');
+        }
 
         if ($value <= self::MINIMUM_GOODS_VALUE) {
             return $this->row('EXCLUDED', 'GOODS_VALUE is not above 2000000.');
@@ -151,10 +155,14 @@ class CsvReportPreview
         }
 
         if (isset($seen[$awb])) {
-            return $this->row('DUPLICATE', 'Repeated qualifying AWB in CSV.', $awb);
+            if ($seen[$awb] === $value) {
+                return $this->row('EXCLUDED', 'Duplicate AWB with same goods value; first row retained.', $awb, $value);
+            }
+
+            return $this->row('DUPLICATE', 'Repeated qualifying AWB has conflicting goods values.', $awb, $value);
         }
 
-        $seen[$awb] = true;
+        $seen[$awb] = $value;
 
         return $this->row('VALID', null, $awb, $value);
     }

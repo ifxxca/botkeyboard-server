@@ -110,9 +110,88 @@ class ImportWorkflowTest extends TestCase
             ->assertSessionHasErrors('workbook');
         $this->assertDatabaseHas('import_batches', ['status' => 'FAILED']);
 
-        $batch = $this->upload([['AWB' => '0201234567890', 'TITLE' => ['=1+1', DataType::TYPE_FORMULA]]]);
-        $this->assertSame(1, $batch->invalid_rows);
+        $batch = $this->upload([
+            ['AWB' => '0201234567890', 'TITLE' => ['=1+1', DataType::TYPE_FORMULA]],
+            ['AWB' => '0202222222222', 'VALUE' => '-100000'],
+        ]);
+        $this->assertSame(2, $batch->invalid_rows);
         $this->assertDatabaseCount('attention_items', 0);
+    }
+
+    public function test_hvi_report_deduplicates_equal_values_and_excludes_negative_values_before_commit(): void
+    {
+        Storage::fake('local');
+        $this->actingAs(User::factory()->create());
+
+        $batch = $this->upload([
+            ['Cnote No' => "'0201234567890", 'Cnote Goods Value' => '4250000'],
+            ['Cnote No' => "'020-1234567890", 'Cnote Goods Value' => '4250000'],
+            ['Cnote No' => '0202222222222', 'Cnote Goods Value' => '-100000'],
+            ['Cnote No' => '0203333333333', 'Cnote Goods Value' => [-100000, DataType::TYPE_NUMERIC]],
+            ['Cnote No' => '0204444444444', 'Cnote Goods Value' => '3000000'],
+        ], ['Cnote No', 'Cnote Goods Value']);
+
+        $this->assertSame(5, $batch->total_rows);
+        $this->assertSame(2, $batch->valid_rows);
+        $this->assertSame(0, $batch->invalid_rows);
+        $this->assertSame(0, $batch->duplicate_rows);
+        $this->assertSame(3, DB::table('import_rows')->where('import_batch_id', $batch->id)
+            ->where('status', 'EXCLUDED')->count());
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 3, 'status' => 'EXCLUDED',
+            'awb' => '0201234567890', 'declared_value' => 4250000,
+            'issue' => 'Duplicate AWB with same goods value; first row retained.',
+        ]);
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 5, 'status' => 'EXCLUDED',
+            'awb' => null, 'declared_value' => null,
+            'issue' => 'Cnote Goods Value is negative; excluded from high-value selection.',
+        ]);
+        $this->get(route('admin.imports.show', $batch))->assertSee('Commit complete snapshot');
+
+        $this->post(route('admin.imports.commit', $batch))
+            ->assertRedirect(route('admin.imports.show', $batch))->assertSessionHasNoErrors();
+
+        $this->assertDatabaseCount('attention_items', 2);
+        $this->assertDatabaseHas('attention_items', [
+            'import_batch_id' => $batch->id, 'awb' => '0201234567890', 'declared_value' => 4250000,
+        ]);
+        $this->assertDatabaseHas('attention_items', [
+            'import_batch_id' => $batch->id, 'awb' => '0204444444444', 'declared_value' => 3000000,
+        ]);
+        $this->assertDatabaseHas('import_batches', ['id' => $batch->id, 'status' => 'COMMITTED']);
+    }
+
+    public function test_hvi_conflicting_values_and_malformed_cells_still_block_commit(): void
+    {
+        Storage::fake('local');
+        $this->actingAs(User::factory()->create());
+
+        $batch = $this->upload([
+            ['Cnote No' => '0201234567890', 'Cnote Goods Value' => '4250000'],
+            ['Cnote No' => '0201234567890', 'Cnote Goods Value' => '5000000'],
+            ['Cnote No' => '0202222222222', 'Cnote Goods Value' => '-100000.5'],
+            ['Cnote No' => '0203333333333', 'Cnote Goods Value' => ['=-100000', DataType::TYPE_FORMULA]],
+            ['Cnote No' => [1234567890123, DataType::TYPE_NUMERIC], 'Cnote Goods Value' => '3000000'],
+        ], ['Cnote No', 'Cnote Goods Value']);
+
+        $this->assertSame(1, $batch->valid_rows);
+        $this->assertSame(1, $batch->duplicate_rows);
+        $this->assertSame(3, $batch->invalid_rows);
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 3, 'status' => 'DUPLICATE',
+            'issue' => 'Repeated qualifying AWB has conflicting goods values.',
+        ]);
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 5, 'status' => 'INVALID',
+            'issue' => 'Value formula is not allowed.',
+        ]);
+        $this->get(route('admin.imports.show', $batch))->assertDontSee('Commit complete snapshot');
+
+        $this->post(route('admin.imports.commit', $batch))->assertSessionHasErrors('commit');
+
+        $this->assertDatabaseCount('attention_items', 0);
+        $this->assertNull(DB::table('active_datasets')->where('id', 1)->value('active_batch_id'));
     }
 
     public function test_thirteen_digit_text_awb_imports_while_numeric_awb_is_rejected(): void

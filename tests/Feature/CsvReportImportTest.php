@@ -48,7 +48,55 @@ class CsvReportImportTest extends TestCase
         $this->assertDatabaseCount('attention_items', 1);
     }
 
-    public function test_invalid_and_duplicate_qualifying_rows_block_commit(): void
+    public function test_equal_value_report_duplicates_and_negative_values_do_not_block_commit(): void
+    {
+        Storage::fake('local');
+        $this->actingAs(User::factory()->create());
+
+        $batch = $this->upload([
+            ["'0201234567890", '4250000', 'first courier'],
+            ["'020-1234567890", '4250000', 'second courier'],
+            ["'0201234567890", '4250000', 'third courier'],
+            ["'0202222222222", '-100000', 'negative value'],
+            ["'0202222222222", '-100000', 'repeated negative value'],
+            ["'0203333333333", '2500000', 'another selected AWB'],
+        ], "Cnote No,Cnote Goods Value,SHIPPER_NAME\n");
+
+        $this->assertSame(6, $batch->total_rows);
+        $this->assertSame(2, $batch->valid_rows);
+        $this->assertSame(0, $batch->invalid_rows);
+        $this->assertSame(0, $batch->duplicate_rows);
+        $this->assertSame(4, DB::table('import_rows')->where('import_batch_id', $batch->id)
+            ->where('status', 'EXCLUDED')->count());
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 3, 'status' => 'EXCLUDED',
+            'awb' => '0201234567890', 'declared_value' => 4250000,
+            'issue' => 'Duplicate AWB with same goods value; first row retained.',
+        ]);
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 5, 'status' => 'EXCLUDED',
+            'awb' => null, 'declared_value' => null,
+            'issue' => 'GOODS_VALUE is negative; excluded from high-value selection.',
+        ]);
+        $this->get(route('admin.imports.show', $batch))->assertSee('Commit complete snapshot');
+        $this->assertDatabaseCount('attention_items', 0);
+
+        $this->post(route('admin.imports.commit', $batch))
+            ->assertRedirect(route('admin.imports.show', $batch))->assertSessionHasNoErrors();
+
+        $this->assertDatabaseCount('attention_items', 2);
+        $this->assertDatabaseHas('attention_items', [
+            'import_batch_id' => $batch->id, 'awb' => '0201234567890', 'declared_value' => 4250000,
+        ]);
+        $this->assertDatabaseHas('attention_items', [
+            'import_batch_id' => $batch->id, 'awb' => '0203333333333', 'declared_value' => 2500000,
+        ]);
+        $this->assertDatabaseMissing('attention_items', ['awb' => '0202222222222']);
+        $this->assertDatabaseHas('import_batches', ['id' => $batch->id, 'status' => 'COMMITTED']);
+        $this->assertSame($batch->id, (int) DB::table('active_datasets')->where('id', 1)->value('active_batch_id'));
+    }
+
+    public function test_invalid_and_conflicting_qualifying_rows_block_commit(): void
     {
         Storage::fake('local');
         $this->actingAs(User::factory()->create());
@@ -58,11 +106,17 @@ class CsvReportImportTest extends TestCase
             ["'8994016015726", '2600000', 'duplicate'],
             ["'6970493063940", '2.7E+6', 'invalid value'],
             ["'BAD", '3000000', 'invalid AWB'],
+            ["'0202222222222", '-100000.5', 'invalid fractional negative value'],
         ]);
 
         $this->assertSame(1, $batch->valid_rows);
         $this->assertSame(1, $batch->duplicate_rows);
-        $this->assertSame(2, $batch->invalid_rows);
+        $this->assertSame(3, $batch->invalid_rows);
+        $this->assertDatabaseHas('import_rows', [
+            'import_batch_id' => $batch->id, 'row_number' => 3, 'status' => 'DUPLICATE',
+            'issue' => 'Repeated qualifying AWB has conflicting goods values.',
+        ]);
+        $this->get(route('admin.imports.show', $batch))->assertDontSee('Commit complete snapshot');
         $this->post(route('admin.imports.commit', $batch))->assertSessionHasErrors('commit');
         $this->assertDatabaseCount('attention_items', 0);
     }
@@ -75,13 +129,13 @@ class CsvReportImportTest extends TestCase
         $first = $this->upload([["'0201234567890", '2500000', 'first']]);
         $this->post(route('admin.imports.commit', $first))->assertRedirect();
         $empty = $this->upload([["'8994016015726", '1300000', 'below'],
-            ["'6970493063940", '', 'missing']]);
+            ["'6970493063940", '', 'missing'], ["'0202222222222", '-100000', 'negative']]);
 
-        $this->assertSame(2, $empty->total_rows);
+        $this->assertSame(3, $empty->total_rows);
         $this->assertSame(0, $empty->valid_rows);
-        $this->assertSame(2, DB::table('import_rows')->where('import_batch_id', $empty->id)
+        $this->assertSame(3, DB::table('import_rows')->where('import_batch_id', $empty->id)
             ->where('status', 'EXCLUDED')->count());
-        $this->get(route('admin.imports.show', $empty))->assertOk()->assertSee('Excluded: 2');
+        $this->get(route('admin.imports.show', $empty))->assertOk()->assertSee('Excluded: 3');
         $this->post(route('admin.imports.commit', $empty))->assertSessionHasErrors('commit');
         $this->assertSame($first->id, (int) DB::table('active_datasets')->where('id', 1)->value('active_batch_id'));
         $this->assertTrue(app(AttentionLookup::class)->check('0201234567890')['matched']);

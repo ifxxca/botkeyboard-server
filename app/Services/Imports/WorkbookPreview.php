@@ -177,7 +177,7 @@ class WorkbookPreview
     }
 
     /** @param array<string, int> $headers
-     * @param  array<string, bool>  $seen
+     * @param  array<string, bool|int>  $seen
      * @return array<string, int|string|null>|null
      */
     private function parseRow(Worksheet $sheet, array $headers, int $rowNumber, array &$seen): ?array
@@ -250,16 +250,20 @@ class WorkbookPreview
     }
 
     /** @param array<string, Cell> $cells
-     * @param  array<string, bool>  $seen
+     * @param  array<string, int>  $seen
      * @return array<string, int|string|null>
      */
     private function parseHviRow(array $cells, array &$seen): array
     {
         try {
-            $value = $this->value($cells['VALUE']);
+            $value = $this->value($cells['VALUE'], allowNegative: true);
 
             if ($value === null) {
                 return $this->hviRow('EXCLUDED', 'Cnote Goods Value is empty.');
+            }
+
+            if ($value < 0) {
+                return $this->hviRow('EXCLUDED', 'Cnote Goods Value is negative; excluded from high-value selection.');
             }
 
             if ($value <= 2_000_000) {
@@ -278,10 +282,14 @@ class WorkbookPreview
             $awb = $this->normalizer->normalize(str_replace('-', '', $rawAwb));
 
             if (isset($seen[$awb])) {
-                return $this->hviRow('DUPLICATE', 'Repeated qualifying AWB in workbook.', $awb);
+                if ($seen[$awb] === $value) {
+                    return $this->hviRow('EXCLUDED', 'Duplicate AWB with same goods value; first row retained.', $awb, $value);
+                }
+
+                return $this->hviRow('DUPLICATE', 'Repeated qualifying AWB has conflicting goods values.', $awb, $value);
             }
 
-            $seen[$awb] = true;
+            $seen[$awb] = $value;
 
             return $this->hviRow('VALID', null, $awb, $value);
         } catch (InvalidArgumentException $exception) {
@@ -318,7 +326,7 @@ class WorkbookPreview
         return $value;
     }
 
-    private function value(?Cell $cell): ?int
+    private function value(?Cell $cell, bool $allowNegative = false): ?int
     {
         if ($cell === null || $cell->getValue() === null || $cell->getValue() === '') {
             return null;
@@ -331,7 +339,9 @@ class WorkbookPreview
         $raw = $cell->getValue();
         $text = is_int($raw) || is_float($raw) || is_string($raw) ? (string) $raw : '';
 
-        if (preg_match('/\A(?:0|[1-9][0-9]{0,14})\z/D', $text) !== 1) {
+        $pattern = $allowNegative ? '/\A-?(?:0|[1-9][0-9]{0,14})\z/D' : '/\A(?:0|[1-9][0-9]{0,14})\z/D';
+
+        if (preg_match($pattern, $text) !== 1) {
             throw new InvalidArgumentException('Value must be a whole number of at most 15 digits.');
         }
 
